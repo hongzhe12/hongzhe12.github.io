@@ -1433,7 +1433,7 @@
       }
 
       // Crackle pops into a small cloud of golden sparks.
-      function crackleEffect(star) {
+      function crackleEffect(star, state) {
         createParticleArc(0, PI_2, 10, 1.8, (angle) => {
           Spark.add(
             star.x,
@@ -1445,7 +1445,10 @@
             300 + Math.random() * 200
           );
         });
-        soundManager.playSound("crackle");
+        if (!state || !state.played) {
+          state && (state.played = true);
+          soundManager.playSound("crackle");
+        }
       }
 
       /**
@@ -1521,19 +1524,23 @@
           if (this.color === INVISIBLE) {
             comet.sparkColor = COLOR.Gold;
           }
-          comet.onDeath = (comet) => this.burst(comet.x, comet.y);
+          comet.onDeath = (comet) => this.burst(comet.x, comet.y, true);
           // comet.onDeath = () => this.burst(launchX, burstY);
           soundManager.playSound("lift");
         }
-        burst(x, y) {
+        burst(x, y, isMain = false) {
           // Set burst speed so overall burst grows to set size. This specific formula was derived from testing, and is affected by simulated air drag.
           const speed = this.size / 96;
 
           let color, onDeath, sparkFreq, sparkSpeed, sparkLife;
           let sparkLifeVariation = 0.25;
+          let crackleState;
           if (this.crossette) onDeath = crossetteEffect;
           if (this.floral) onDeath = floralEffect;
-          if (this.crackle) onDeath = crackleEffect;
+          if (this.crackle) {
+            crackleState = { played: false };
+            onDeath = (star) => crackleEffect(star, crackleState);
+          }
           if (this.fallingLeaves) onDeath = fallingLeavesEffect;
           if (this.glitter === "light") {
             sparkFreq = 200;
@@ -1654,7 +1661,7 @@
               glitterColor:
                 this.pistilColor === COLOR.Gold ? COLOR.Gold : COLOR.White,
             });
-            innerShell.burst(x, y);
+            innerShell.burst(x, y, false);
           }
           if (this.streamers) {
             const innerShell = new Shell({
@@ -1665,11 +1672,11 @@
               color: COLOR.White,
               glitter: "streamer",
             });
-            innerShell.burst(x, y);
+            innerShell.burst(x, y, false);
           }
           // Queue burst flash render
           BurstFlash.add(x, y, this.size / 8);
-          if (this.comet) {
+          if (isMain && this.comet) {
             soundManager.playSound(
               "burst",
               Math.min(1, this.size / 600)
