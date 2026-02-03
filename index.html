@@ -111,6 +111,20 @@
         justify-content: space-between;
         transition: opacity 0.3s, visibility 0.3s;
       }
+      .greeting {
+        position: absolute;
+        top: 64px;
+        left: 0;
+        right: 0;
+        text-align: center;
+        font-size: clamp(18px, 2.4vw, 28px);
+        font-weight: 700;
+        color: #ffe8a3;
+        text-shadow: 0 0 12px rgba(255, 200, 120, 0.6), 0 0 24px rgba(255, 120, 40, 0.5);
+        pointer-events: none;
+        letter-spacing: 0.12em;
+        z-index: 3;
+      }
       @media (min-width: 800px) {
         #controls {
           visibility: visible;
@@ -262,6 +276,7 @@
     <div class="container">
       <div id="loading-init">Loading...</div>
       <div id="stage-container" class="remove">
+        <div class="greeting">徐灿生日快乐！</div>
         <div id="canvas-container">
           <canvas id="trails-canvas"></canvas>
           <canvas id="main-canvas"></canvas>
@@ -446,6 +461,7 @@
       // -----------
 
       const canInteract = () => !store.state.paused && !store.state.menuOpen;
+      const canPlaySound = () => !store.state.paused;
       const shellNameSelector = () => store.state.config.shell;
       // Converts shell size to number.
       const shellSizeSelector = () => +store.state.config.size;
@@ -977,9 +993,14 @@
 
       let activePointerCount = 0;
       let isUpdatingSpeed = false;
+      let audioArmed = false;
 
       function handlePointerStart(event) {
         activePointerCount++;
+        if (!audioArmed) {
+          audioArmed = true;
+          soundManager.resumeAll();
+        }
         const btnSize = 44;
         if (event.y < btnSize) {
           if (event.x < btnSize) {
@@ -1382,6 +1403,7 @@
         });
         // Queue burst flash render
         BurstFlash.add(star.x, star.y, 24);
+          soundManager.playSound("burstSmall");
       }
 
       // Floral burst with willow stars
@@ -1407,6 +1429,7 @@
         });
         // Queue burst flash render
         BurstFlash.add(star.x, star.y, 24);
+        soundManager.playSound("burstSmall");
       }
 
       // Crackle pops into a small cloud of golden sparks.
@@ -1422,6 +1445,7 @@
             300 + Math.random() * 200
           );
         });
+        soundManager.playSound("crackle");
       }
 
       /**
@@ -1499,6 +1523,7 @@
           }
           comet.onDeath = (comet) => this.burst(comet.x, comet.y);
           // comet.onDeath = () => this.burst(launchX, burstY);
+          soundManager.playSound("lift");
         }
         burst(x, y) {
           // Set burst speed so overall burst grows to set size. This specific formula was derived from testing, and is affected by simulated air drag.
@@ -1644,6 +1669,12 @@
           }
           // Queue burst flash render
           BurstFlash.add(x, y, this.size / 8);
+          if (this.comet) {
+            soundManager.playSound(
+              "burst",
+              Math.min(1, this.size / 600)
+            );
+          }
         }
       }
 
@@ -1755,7 +1786,133 @@
         },
       };
 
-      init();
+      const soundManager = {
+        baseURL: "./audio/",
+        ctx: new (window.AudioContext || window.webkitAudioContext)(),
+        sources: {
+          lift: {
+            volume: 1,
+            playbackRateMin: 0.85,
+            playbackRateMax: 0.95,
+            fileNames: ["lift1.mp3", "lift2.mp3", "lift3.mp3"],
+          },
+          burst: {
+            volume: 1,
+            playbackRateMin: 0.8,
+            playbackRateMax: 0.9,
+            fileNames: ["burst1.mp3", "burst2.mp3"],
+          },
+          burstSmall: {
+            volume: 0.3,
+            playbackRateMin: 0.85,
+            playbackRateMax: 1,
+            fileNames: ["burst-sm-1.mp3", "burst-sm-2.mp3"],
+          },
+          crackle: {
+            volume: 0.25,
+            playbackRateMin: 1,
+            playbackRateMax: 1,
+            fileNames: ["crackle1.mp3"],
+          },
+        },
+
+        preload() {
+          const allFilePromises = [];
+
+          function checkStatus(response) {
+            if (response.status >= 200 && response.status < 300) {
+              return response;
+            }
+            const customError = new Error(response.statusText);
+            customError.response = response;
+            throw customError;
+          }
+
+          const types = Object.keys(this.sources);
+          types.forEach((type) => {
+            const source = this.sources[type];
+            const { fileNames } = source;
+            const filePromises = [];
+            fileNames.forEach((fileName) => {
+              const fileURL = this.baseURL + fileName;
+              const promise = fetch(fileURL)
+                .then(checkStatus)
+                .then((response) => response.arrayBuffer())
+                .then(
+                  (data) =>
+                    new Promise((resolve) => {
+                      this.ctx.decodeAudioData(data, resolve);
+                    })
+                );
+
+              filePromises.push(promise);
+              allFilePromises.push(promise);
+            });
+
+            Promise.all(filePromises).then((buffers) => {
+              source.buffers = buffers;
+            });
+          });
+
+          return Promise.all(allFilePromises);
+        },
+
+        pauseAll() {
+          this.ctx.suspend();
+        },
+
+        resumeAll() {
+          // play a silent sound to unlock in iOS/Chrome mobile
+          this.playSound("lift", 0);
+          setTimeout(() => {
+            this.ctx.resume();
+          }, 200);
+        },
+
+        _lastSmallBurstTime: 0,
+
+        playSound(type, scale = 1) {
+          scale = Math.max(0, Math.min(scale, 1));
+
+          if (!canPlaySound()) return;
+
+          if (type === "burstSmall") {
+            const now = Date.now();
+            if (now - this._lastSmallBurstTime < 20) return;
+            this._lastSmallBurstTime = now;
+          }
+
+          const source = this.sources[type];
+          if (!source || !source.buffers || !source.buffers.length) return;
+
+          const initialVolume = source.volume;
+          const initialPlaybackRate = MyMath.random(
+            source.playbackRateMin,
+            source.playbackRateMax
+          );
+
+          const scaledVolume = initialVolume * scale;
+          const scaledPlaybackRate = initialPlaybackRate * (2 - scale);
+
+          const gainNode = this.ctx.createGain();
+          gainNode.gain.value = scaledVolume;
+
+          const buffer = MyMath.randomChoice(source.buffers);
+          const bufferSource = this.ctx.createBufferSource();
+          bufferSource.playbackRate.value = scaledPlaybackRate;
+          bufferSource.buffer = buffer;
+          bufferSource.connect(gainNode);
+          gainNode.connect(this.ctx.destination);
+          bufferSource.start(0);
+        },
+      };
+
+      soundManager
+        .preload()
+        .catch(() => {})
+        .finally(() => {
+          init();
+        });
     </script>
   </body>
 </html>
